@@ -97,6 +97,7 @@ void stage0_main(
 	android_image_boot_params_t *and_boot;
 	memory_layout_t *loader_mem;
 	packed_file_t packed_file[PACK_BIN_COUNT];
+	uint64_t barrier_size;
 
 	print_init(FALSE);
 
@@ -146,9 +147,6 @@ void stage0_main(
 	evmm_desc->sipi_ap_wkup_addr = (uint64_t)vmm_boot->VMMSipiApWkupAddr;
 	evmm_desc->top_of_mem = tom;
 	evmm_desc->tsc_per_ms = 0; //The TSC frequency will be set in Stage1
-#ifdef MODULE_TEMPLATE_TEE
-       evmm_desc->x64_cr3 = asm_get_cr3();
-#endif
 
 	evmm_desc->stage1_file.loadtime_addr = packed_file[STAGE1_BIN_INDEX].load_addr;
 	evmm_desc->stage1_file.loadtime_size = packed_file[STAGE1_BIN_INDEX].size;
@@ -157,8 +155,16 @@ void stage0_main(
 
 	evmm_desc->evmm_file.loadtime_addr = packed_file[EVMM_BIN_INDEX].load_addr;
 	evmm_desc->evmm_file.loadtime_size = packed_file[EVMM_BIN_INDEX].size;
-	evmm_desc->evmm_file.runtime_addr = (uint64_t)vmm_boot->VMMMemBase;
-	evmm_desc->evmm_file.runtime_total_size = ((uint64_t)(vmm_boot->VMMMemSize)) << 10;
+
+	barrier_size = calulate_barrier_size((uint64_t)vmm_boot->VMMMemSize << 10, MINIMAL_EVMM_RT_SIZE);
+	if (barrier_size == (uint64_t)-1) {
+		print_panic("vmm mem size is smaller than %u\n", MINIMAL_EVMM_RT_SIZE);
+		goto fail;
+	}
+
+	evmm_desc->evmm_file.barrier_size = barrier_size;
+	evmm_desc->evmm_file.runtime_total_size = (((uint64_t)vmm_boot->VMMMemSize) << 10) - 2 * barrier_size;
+	evmm_desc->evmm_file.runtime_addr = (uint64_t)vmm_boot->VMMMemBase + barrier_size;
 
 	fill_g0gcpu0(&evmm_desc->guest0_gcpu0_state, &and_boot->CpuState);
 
