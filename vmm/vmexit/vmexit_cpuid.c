@@ -68,10 +68,22 @@ void cpuid_leaf_ext_1h_filter(guest_cpu_handle_t gcpu, cpuid_params_t *p_cpuid)
 static
 void cpuid_leaf_40000000h_filter(UNUSED guest_cpu_handle_t gcpu, cpuid_params_t *p_cpuid)
 {
+#if 0
 	p_cpuid->eax = 0x40000000; /* Largest basic leaf supported */
 	p_cpuid->ebx = EVMM_SIGNATURE_VMM;
 	p_cpuid->ecx = EVMM_SIGNATURE_VMM;
 	p_cpuid->edx = EVMM_SIGNATURE_VMM;
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-align"
+	static const char signature[12] = "KVMKVMKVM\0\0";
+	const uint32_t *sigptr = (const uint32_t *)signature;
+	p_cpuid->eax = 0x40000001;
+	p_cpuid->ebx = sigptr[0];
+	p_cpuid->ecx = sigptr[1];
+	p_cpuid->edx = sigptr[2];
+#pragma GCC diagnostic pop
+#endif
 }
 
 static cpuid_filter_t g_cpuid_filter[] = {
