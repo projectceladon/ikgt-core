@@ -33,6 +33,8 @@ export AS = $(COMPILE_TOOLCHAIN)gcc
 export LD = $(COMPILE_TOOLCHAIN)ld
 endif
 
+$(info CC=$(CC))
+
 export CC_VERSION = $(shell $(CC) --version)
 export LD_VERSION = $(shell $(LD) --version)
 
