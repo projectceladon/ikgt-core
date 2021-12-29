@@ -16,13 +16,17 @@
 #include "guest.h"
 #include "trusty_info.h"
 #include "gcpu_inject_event.h"
-#include "device_sec_info.h"
 
 #include "lib/util.h"
 #include "lib/image_loader.h"
 #include "modules/vmcall.h"
 #include "modules/template_tee.h"
-#include "modules/security_info.h"
+
+#ifndef QEMU_LK
+#ifndef PACK_LK
+#error "PACK_LK is not defined"
+#endif
+#endif
 
 #ifdef MODULE_VTD
 #include "modules/vtd.h"
@@ -32,85 +36,37 @@
 #include "modules/deadloop.h"
 #endif
 
+#ifdef MODULE_VMX_TIMER
+#include "event.h"
+#include "modules/vmx_timer.h"
+#include "scheduler.h"
+
+#define TRUSTY_TIMER_INTR 0x21
+#endif
+
+#ifdef MODULE_SPM_SRV
+#include "modules/spm_srv.h"
+#endif
+
 enum {
 	TRUSTY_VMCALL_SMC       = 0x74727500,
 	TRUSTY_VMCALL_DUMP_INIT = 0x74727507,
+#ifdef MODULE_VMX_TIMER
+	TRUSTY_VMCALL_VMX_TIMER = 0x74727508,
+#endif
+	TRUSTY_VMCALL_SECINFO   = 0x74727509,
 };
 
 static uint64_t g_init_rdi, g_init_rsp, g_init_rip;
-static guest_handle_t trusty_guest;
-
-/* Reserved size for dev_sec_info/trusty_startup and Stack(1 page) */
-/*
- * Trusty load size formula:
- * MEM assigned to Trusty is 16MB size in total
- * Stack size must be reserved
- * Trusty Tee runtime memory will be calculated by Trusty itself
- * The rest region can be use to load Trusty image
- * ------------------------
- *     ^     |          |
- *   Stack   |          |
- * ----------|          |
- *     ^     |          |
- *     |     |          |
- *   HEAP    |          |
- *     |     |    M     |
- *  ---------|          |
- *     ^     |    E     |
- *     |     |          |
- *   Trusty  |    M     |
- *   load    |          |
- *   size    |          |
- *     |     |          |
- *  ---------|          |
- *     ^     |          |
- *  Boot info|          |
- * ------------------------
- */
+static uint8_t seed[BUP_MKHI_BOOTLOADER_SEED_LEN];
 
 static uint64_t relocate_trusty_image(module_file_info_t *tee_file)
 {
-	boolean_t ret = FALSE;
-	uint64_t entry_point;
+	memcpy((void *)tee_file->runtime_addr,
+		(void *)tee_file->loadtime_addr,
+		tee_file->loadtime_size);
 
-	/* lk region: first page is trusty info, last page is stack. */
-	tee_file->runtime_addr += PAGE_4K_SIZE;
-	tee_file->runtime_total_size -= PAGE_4K_SIZE;
-
-	ret = relocate_elf_image(tee_file, &entry_point);
-	if (!ret) {
-		print_trace("Failed to load ELF file. Try multiboot now!\n");
-		ret = relocate_multiboot_image((uint64_t *)tee_file->loadtime_addr,
-				tee_file->loadtime_size, &entry_point);
-	}
-	VMM_ASSERT_EX(ret, "Failed to relocate Trusty image!\n");
-
-	/* restore lk runtime address and total size */
-	tee_file->runtime_addr -= PAGE_4K_SIZE;
-	tee_file->runtime_total_size += PAGE_4K_SIZE;
-
-	return entry_point;
-}
-
-/* Set up trusty device security info and trusty startup info */
-static uint64_t setup_trusty_mem(uint64_t runtime_addr, uint64_t runtime_total_size, void *dev_sec_info)
-{
-	uint32_t dev_sec_info_size;
-	trusty_startup_info_t *trusty_para;
-
-	dev_sec_info_size = mov_sec_info((void *)runtime_addr, dev_sec_info);
-
-	/* Setup trusty startup info */
-	trusty_para = (trusty_startup_info_t *)ALIGN_F(runtime_addr + dev_sec_info_size, 8);
-	VMM_ASSERT_EX(((uint64_t)trusty_para + sizeof(trusty_startup_info_t)) <
-			(runtime_addr + PAGE_4K_SIZE),
-			"size of (dev_sec_info+trusty_startup_info) exceeds the reserved 4K size!\n");
-	trusty_para->size_of_this_struct  = sizeof(trusty_startup_info_t);
-	trusty_para->mem_size             = runtime_total_size;
-	trusty_para->calibrate_tsc_per_ms = tsc_per_ms;
-	trusty_para->trusty_mem_base      = runtime_addr;
-
-	return (uint64_t)trusty_para;
+	return tee_file->runtime_addr;
 }
 
 static void before_launching_tee(guest_cpu_handle_t gcpu_trusty)
@@ -118,39 +74,17 @@ static void before_launching_tee(guest_cpu_handle_t gcpu_trusty)
 	gcpu_set_gp_reg(gcpu_trusty, REG_RDI, g_init_rdi);
 	gcpu_set_gp_reg(gcpu_trusty, REG_RSP, g_init_rsp);
 	vmcs_write(gcpu_trusty->vmcs, VMCS_GUEST_RIP, g_init_rip);
-}
 
-static uint64_t parse_trusty_boot_param(guest_cpu_handle_t gcpu, uint64_t *runtime_addr, uint64_t *runtime_total_size)
-{
-	uint64_t rdi;
-	trusty_boot_params_t *trusty_boot_params;
-
-	/* avoid warning -Wbad-function-cast */
-	rdi = gcpu_get_gp_reg(gcpu, REG_RDI);
-	VMM_ASSERT_EX(rdi, "Invalid trusty boot params\n");
-
-	/* trusty_boot_params is passed from OSloader */
-	trusty_boot_params = (trusty_boot_params_t *)rdi;
-
-	*runtime_addr = trusty_boot_params->runtime_addr;
-	/* osloader alloc 16M memory for trusty */
-	*runtime_total_size = 16 MEGABYTE;
-
-	return trusty_boot_params->entry_point;
-}
-
-static void first_smc_to_tee(guest_cpu_handle_t gcpu_ree)
-{
-	uint64_t runtime_addr, runtime_total_size;
-
-	/* 1. Get trusty info from osloader then set trusty startup&sec info.
-	 * 2. Set RIP RDI and RSP
+#ifdef QEMU_LK
+	/*
+	 * Qemu lk project is used to validate Trusty + iKGT + Android
+	 * for patches which have been uploaded to Google Gerrit.
+	 *
+	 * Set RAX as MULTIBOOT MAGIC WORD, RBX as the offset from MEMBASE,
 	 */
-	g_init_rip = parse_trusty_boot_param(gcpu_ree, &runtime_addr, &runtime_total_size);
-	g_init_rdi = setup_trusty_mem(runtime_addr, runtime_total_size, INTERNAL);
-	g_init_rsp = runtime_addr + runtime_total_size;
-
-	launch_tee(trusty_guest, runtime_addr, runtime_total_size);
+	gcpu_set_gp_reg(gcpu_trusty, REG_RAX, 0x2BADB002);
+	gcpu_set_gp_reg(gcpu_trusty, REG_RBX, 0x4000);
+#endif
 }
 
 static void trusty_vmcall_dump_init(guest_cpu_handle_t gcpu)
@@ -176,28 +110,114 @@ static void trusty_vmcall_dump_init(guest_cpu_handle_t gcpu)
 	gcpu_set_gp_reg(gcpu, REG_RAX, 0);
 }
 
-static void *sensitive_info;
-static void trusty_erase_sensetive_info(void)
+static void trusty_vmcall_get_seed(guest_cpu_handle_t gcpu)
 {
-#ifndef DEBUG //in DEBUG build, access from VMM to Trusty will be removed. so, only erase sensetive info in RELEASE build
-	memset(sensitive_info, 0, PAGE_4K_SIZE);
+	static boolean_t fuse = FALSE;
+	boolean_t ret;
+	uint64_t gva;
+	pf_info_t pfinfo;
+
+	D(VMM_ASSERT(gcpu));
+	D(VMM_ASSERT(GUEST_REE != gcpu->guest->id));
+
+	if (!fuse && (GUEST_REE != gcpu->guest->id)) {
+		gva = gcpu_get_gp_reg(gcpu, REG_RDI);
+		D(VMM_ASSERT(gva));
+
+		ret = gcpu_copy_to_gva(gcpu, gva, (uint64_t)seed, BUP_MKHI_BOOTLOADER_SEED_LEN, &pfinfo);
+		if (!ret) {
+			print_panic("Failed to copy security info\n");
+		}
+
+		memset((void *)seed, 0, BUP_MKHI_BOOTLOADER_SEED_LEN);
+		barrier();
+
+		fuse = TRUE;
+	}
+}
+
+/*
+ * Pay attention to post_world_switch, since before invokes post_world_switch,
+ * SMC hanlder has already scheduled from gcpu to next gcpu on same host cpu.
+ * First paramter is destination gcpu of SMC, and second parameter is source gcpu
+ * of SMC.
+ */
+static void post_world_switch(guest_cpu_handle_t gcpu,
+		guest_cpu_handle_t gcpu_prev)
+{
+	D(VMM_ASSERT(gcpu));
+	D(VMM_ASSERT(gcpu_prev));
+
+#ifdef MODULE_VMX_TIMER
+	vmx_timer_copy(gcpu_prev, gcpu);
 #endif
 }
 
-void trusty_register_deadloop_handler(evmm_desc_t *evmm_desc)
+#ifdef MODULE_VMX_TIMER
+static void trusty_vmcall_vmx_timer(guest_cpu_handle_t gcpu)
 {
-	D(VMM_ASSERT_EX(evmm_desc, "evmm_desc is NULL\n"));
-	sensitive_info = (void *)evmm_desc->trusty_tee_desc.tee_file.runtime_addr;
+	uint64_t timer_interval;
+	uint64_t tick;
 
-	register_final_deadloop_handler(trusty_erase_sensetive_info);
+	D(VMM_ASSERT(gcpu));
+
+	/* RDI stores the timer interval in millisecond to be set */
+	timer_interval = gcpu_get_gp_reg(gcpu, REG_RDI);
+
+	if (0 == timer_interval) {
+		vmx_timer_set_mode(gcpu, TIMER_MODE_STOPPED, 0);
+	} else {
+		tick = vmx_timer_ms_to_tick(timer_interval);
+#ifdef QEMU_LK
+		/*
+		 * VMX preemption timer is used on QEMU platform only for current stage.
+		 *
+		 * When Trusty runs on top of QEMU with KVM nested-VT feature enabled,
+		 * QEMU would be always scheduled out by host Linux kernel when QEMU guest
+		 * runs into sleep or set timer. In this situation, TSC in QEMU guest
+		 * increase quite slow, it makes VMX preepmtion timer quite slow.
+		 *
+		 * In order to schedule in QEMU guest more frequently, add TSC acceleration
+		 * to reduce TSC elapse when guest sets VMX preepmtion timer.
+		 */
+		tick /= 30;
+#endif
+		vmx_timer_set_mode(gcpu, TIMER_MODE_ONESHOT, tick);
+	}
 }
+
+static void vmx_timer_event_handler(guest_cpu_handle_t gcpu, UNUSED void* pv)
+{
+	D(VMM_ASSERT(gcpu));
+
+	gcpu_set_pending_intr(gcpu, TRUSTY_TIMER_INTR);
+}
+#endif
+
+#ifdef MODULE_SPM_SRV
+static boolean_t spm_srv_call(guest_cpu_handle_t gcpu)
+{
+	D(VMM_ASSERT(gcpu));
+
+	if (is_spm_srv_call(gcpu)) {
+		spm_mm_smc_handler(gcpu);
+		return TRUE;
+	}
+
+	return FALSE;
+}
+#endif
 
 void init_trusty_tee(evmm_desc_t *evmm_desc)
 {
 	tee_config_t trusty_cfg;
 	tee_desc_t *trusty_desc;
-	uint8_t smc_param_to_tee[] = {REG_RDI, REG_RSI, REG_RDX, REG_RBX};
-	uint8_t smc_param_to_ree[] = {REG_RDI, REG_RSI, REG_RDX, REG_RBX};
+	guest_handle_t trusty_guest;
+	uint8_t smc_param_to_tee[] = {REG_RDI, REG_RSI, REG_RDX, REG_RCX};
+	uint8_t smc_param_to_ree[] = {REG_RDI, REG_RSI, REG_RDX, REG_RCX};
+	uint64_t runtime_addr;
+	uint64_t runtime_size;
+	uint64_t barrier_size;
 
 	D(VMM_ASSERT_EX(evmm_desc, "evmm_desc is NULL\n"));
 
@@ -215,40 +235,64 @@ void init_trusty_tee(evmm_desc_t *evmm_desc)
 	fill_smc_param_to_tee(trusty_cfg, smc_param_to_tee);
 	fill_smc_param_from_tee(trusty_cfg, smc_param_to_ree);
 
-#ifdef PACK_LK
 	trusty_cfg.launch_tee_first = TRUE;
-#else
-	trusty_cfg.launch_tee_first = FALSE;
+	trusty_cfg.before_launching_tee = before_launching_tee;
+	trusty_cfg.tee_bsp_status = MODE_64BIT;
+	trusty_cfg.tee_ap_status = HLT;
+	trusty_cfg.post_world_switch = post_world_switch;
+
+#ifdef MODULE_SPM_SRV
+	trusty_cfg.spm_srv_call = spm_srv_call;
 #endif
 
-	trusty_cfg.before_launching_tee = before_launching_tee;
-	trusty_cfg.tee_bsp_status = MODE_32BIT;
-	trusty_cfg.tee_ap_status = HLT;
+	/* Check rowhammer mitigation for TEE */
+	if (trusty_desc->tee_file.barrier_size == 0)
+		print_warn("No rawhammer mitigation for TEE\n");
 
-	if (trusty_cfg.launch_tee_first) {
-		trusty_cfg.tee_runtime_addr = trusty_desc->tee_file.runtime_addr;
-		trusty_cfg.tee_runtime_size = trusty_desc->tee_file.runtime_total_size;
+	runtime_addr = trusty_desc->tee_file.runtime_addr;
+	runtime_size = trusty_desc->tee_file.runtime_total_size;
+	barrier_size = trusty_desc->tee_file.barrier_size;
 
-		/* Set RIP RDI and RSP */
-		g_init_rip = relocate_trusty_image(&trusty_desc->tee_file);
-		g_init_rdi = setup_trusty_mem(trusty_desc->tee_file.runtime_addr,
-			trusty_desc->tee_file.runtime_total_size, trusty_desc->dev_sec_info);
-		g_init_rsp = trusty_desc->tee_file.runtime_addr + trusty_desc->tee_file.runtime_total_size;
-	} else {
-		trusty_cfg.first_smc_to_tee = first_smc_to_tee;
+	/*
+	 * When we create EPT for Trusty guest, memory region for Trusty guest
+	 * should contains Trusty memory and 2 barriers, since memory resides
+	 * in barrier region is used for Trusty guest row hammer mitigation,
+	 * normal world should never touch barriers.
+	 */
+	trusty_cfg.tee_runtime_addr = runtime_addr - barrier_size;
+	trusty_cfg.tee_runtime_size = runtime_size + 2 * barrier_size;
 
-		/* Copy dev_sec_info from loader to VMM's memory which will be alloced in mov_sec_info */
-		mov_sec_info(INTERNAL, trusty_desc->dev_sec_info);
-	}
+	memcpy(seed, trusty_desc->seed, BUP_MKHI_BOOTLOADER_SEED_LEN);
+	memset((void *)trusty_desc->seed, 0, BUP_MKHI_BOOTLOADER_SEED_LEN);
+	barrier();
+
+	/* Set RIP RDI and RSP */
+	g_init_rip = relocate_trusty_image(&trusty_desc->tee_file);
+	g_init_rdi = runtime_size;
+	g_init_rsp = runtime_addr + runtime_size;
 
 	trusty_guest = create_tee(&trusty_cfg);
 	VMM_ASSERT_EX(trusty_guest, "Failed to create trusty guest!\n");
 
+#ifdef MODULE_VTD
 #ifdef DMA_FROM_CSE
 	vtd_assign_dev(gid2did(trusty_guest->id), DMA_FROM_CSE);
 #endif
+#endif
 
 	vmcall_register(GUEST_REE, TRUSTY_VMCALL_DUMP_INIT, trusty_vmcall_dump_init);
+
+	vmcall_register(trusty_guest->id,
+            TRUSTY_VMCALL_SECINFO,
+            trusty_vmcall_get_seed);
+
+#ifdef MODULE_VMX_TIMER
+	event_register(EVENT_VMX_TIMER, vmx_timer_event_handler);
+
+	vmcall_register(trusty_guest->id,
+            TRUSTY_VMCALL_VMX_TIMER,
+            trusty_vmcall_vmx_timer);
+#endif
 
 	return;
 }

@@ -96,11 +96,29 @@ typedef struct {
 	uint64_t size;
 } packed_file_t;
 
+typedef struct init_register {
+	uint64_t rflags;
+	uint64_t r15;
+	uint64_t r14;
+	uint64_t r13;
+	uint64_t r12;
+	uint64_t r11;
+	uint64_t r10;
+	uint64_t r9;
+	uint64_t r8;
+	uint64_t rdi;
+	uint64_t rsi;
+	uint64_t rbp;
+	uint64_t rsp;
+	uint64_t rbx;
+	uint64_t rdx;
+	uint64_t rcx;
+	uint64_t rax;
+} init_register_t;
+
 void setup_32bit_env(gcpu_state_t *gcpu_state);
-void make_dummy_trusty_info(void *info);
 boolean_t get_file_params(uint64_t base, packed_file_t *packed_file);
 boolean_t file_parse(evmm_desc_t *evmm_desc, uint64_t base, uint32_t offset, uint32_t size);
 uint64_t get_top_of_memory(multiboot_info_t *mbi);
-uint64_t get_efi_tom(uint64_t mmap_addr, uint32_t mmap_size);
 
 #endif

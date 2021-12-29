@@ -176,12 +176,28 @@ void save_current_cpu_state(gcpu_state_t *s)
 	 * might occur if TSS is used bootloader. Then bootlaoder will find us since we
 	 * changed TR to 0, and we can fix it for that bootlaoder. */
 	fill_segment(&s->segment[SEG_TR], 0, 0xffffffff, 0x808b, 0);
-	/* For segments: get selector from current environment, selector of ES/FS/GS are from DS,
-	 * hardcode other fields to make guest launch successful. */
+
 	fill_segment(&s->segment[SEG_CS], 0, 0xffffffff, 0xa09b, asm_get_cs());
 	fill_segment(&s->segment[SEG_DS], 0, 0xffffffff, 0xc093, asm_get_ds());
-	fill_segment(&s->segment[SEG_ES], 0, 0xffffffff, 0xc093, asm_get_ds());
-	fill_segment(&s->segment[SEG_FS], 0, 0xffffffff, 0xc093, asm_get_ds());
-	fill_segment(&s->segment[SEG_GS], 0, 0xffffffff, 0xc093, asm_get_ds());
-	fill_segment(&s->segment[SEG_SS], 0, 0xffffffff, 0xc093, asm_get_ds());
+	fill_segment(&s->segment[SEG_ES], 0, 0xffffffff, 0xc093, asm_get_es());
+	fill_segment(&s->segment[SEG_FS], asm_rdmsr(MSR_FS_BASE), 0xffffffff, 0xc093, asm_get_fs());
+	fill_segment(&s->segment[SEG_GS], asm_rdmsr(MSR_GS_BASE), 0xffffffff, 0xc093, asm_get_gs());
+	fill_segment(&s->segment[SEG_SS], 0, 0xffffffff, 0xc093, asm_get_ss());
+}
+
+/* Calculate barrier size for rowhammer mitigation
+ * Memory layout:
+ * barrier memory (1M bytes if exist)
+ * EVMM/TEE memory
+ * barrier memory (1M bytes if exist)
+ */
+uint64_t calulate_barrier_size(uint64_t total_mem_size, uint64_t min_mem_size)
+{
+	if (total_mem_size < min_mem_size) {
+		return (uint64_t)-1;
+	} else if (total_mem_size < min_mem_size + 2 * DEFAULT_BARRIER_SIZE) {
+		return 0;
+	} else {
+		return DEFAULT_BARRIER_SIZE;
+	}
 }

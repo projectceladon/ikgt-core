@@ -19,7 +19,7 @@ extern efi_boot_services_t *g_bs;
 extern void EFI_API ap_start(void *arg);
 
 typedef void (*hand_over_c_func_t)(uint32_t cpu_id, void *arg, uint64_t old_rsp);
-hand_over_c_func_t hand_over_entry;
+hand_over_c_func_t efi_hand_over_entry;
 
 /* Starts from 1 since BSP will not be counted in efi_ap.S */
 volatile uint64_t cpu_num = 1;
@@ -42,7 +42,7 @@ uint64_t efi_launch_aps(uint64_t c_entry)
 	if (!c_entry) {
 		return 0;
 	}
-	hand_over_entry = (hand_over_c_func_t)c_entry;
+	efi_hand_over_entry = (hand_over_c_func_t)c_entry;
 
 	/* Locate MP_SERVICE protocol */
 	ret = g_bs->locate_protocol(&mp_service_guid, NULL, (void **)&mp);
@@ -85,4 +85,41 @@ out:
 	asm volatile("cli;");
 
 	return num_enabled_processors;
+}
+
+boolean_t efi_enable_disable_aps(boolean_t enable)
+{
+	uintn_t num_core, num_core_enabled;
+	uintn_t core_id;
+	uintn_t i;
+	efi_guid_t mp_service_guid = EFI_MP_SERVICES_PROTOCOL_GUID;
+	efi_mp_services_protocol_t *mp;
+	efi_status_t ret;
+
+	ret = g_bs->locate_protocol(&mp_service_guid, NULL, (void **)&mp);
+	if (ret != EFI_SUCCESS) {
+		return FALSE;
+	}
+
+	ret = mp->get_number_of_processors(mp, &num_core, &num_core_enabled);
+	if (ret != EFI_SUCCESS) {
+		return FALSE;
+	}
+
+	ret = mp->who_am_i(mp, &core_id);
+	if (ret != EFI_SUCCESS) {
+		return FALSE;
+	}
+
+	for (i = 0; i < num_core; i++) {
+		if (i == core_id)
+			continue;
+
+		ret = mp->enable_disable_ap(mp, i, (efi_bool_t)enable, NULL);
+		if (ret != EFI_SUCCESS) {
+			return FALSE;
+		}
+	}
+
+	return TRUE;
 }

@@ -166,6 +166,10 @@
 #include "modules/block_npk.h"
 #endif
 
+#ifdef MODULE_UCODE_UPDATE
+#include "modules/ucode_update.h"
+#endif
+
 typedef struct {
 	uint64_t	cpuid;
 	uint64_t	evmm_desc;
@@ -226,10 +230,6 @@ void vmm_main_continue(vmm_input_params_t *vmm_input_params)
 
 	/* stage 1: setup host */
 	if (cpuid == 0) {
-#if defined(MODULE_TRUSTY_GUEST) || defined(MODULE_TRUSTY_TEE)
-		trusty_register_deadloop_handler(evmm_desc);
-#endif
-
 		print_trace(
 			"\nVMM image base address = 0x%llX\n",
 			evmm_desc->evmm_file.runtime_addr);
@@ -430,6 +430,10 @@ void vmm_main_continue(vmm_input_params_t *vmm_input_params)
 		nested_vt_init();
 #endif
 
+#ifdef MODULE_UCODE_UPDATE
+		ucode_update_init();
+#endif
+
 #ifdef MODULE_VMEXIT_INIT
 		vmexit_register_init_event();
 #endif
@@ -485,7 +489,12 @@ void vmm_main_continue(vmm_input_params_t *vmm_input_params)
 		/* Initialize GPM */
 		gpm_init();
 
-		guest_save_evmm_range(evmm_desc->evmm_file.runtime_addr, evmm_desc->evmm_file.runtime_total_size);
+		/* Check rowhammer mitigation for evmm */
+		if (evmm_desc->evmm_file.barrier_size == 0)
+			print_warn("No rawhammer mitigation for EVMM\n");
+
+		guest_save_evmm_range(evmm_desc->evmm_file.runtime_addr - evmm_desc->evmm_file.barrier_size,
+			 evmm_desc->evmm_file.runtime_total_size + 2 * evmm_desc->evmm_file.barrier_size);
 
 		/* Create guest with RWX(0x7) attribute */
 		create_guest(host_cpu_num, 0x7);
@@ -513,7 +522,9 @@ void vmm_main_continue(vmm_input_params_t *vmm_input_params)
 		/* vtd_done() will not affect AP boot.
 		 * since BSP needs to wait for AP before gcpu_resume(), put vtd_done()
 		 * here will take BSP more time and reduce the wait time for AP. */
+#ifndef ACTIVATE_VTD_BY_VMCALL
 		vtd_activate();
+#endif
 #endif
 
 #ifdef MODULE_BLOCK_NPK
