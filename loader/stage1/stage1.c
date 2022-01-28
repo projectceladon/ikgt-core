@@ -98,23 +98,23 @@ static void ap_continue(uint32_t cpu_id)
 #endif
 #endif
 
-void stage1_main(evmm_desc_t *xd)
+uint32_t stage1_main(evmm_desc_t *xd)
 {
 #if (CPU_NUM != 1)
 	uint32_t num_of_cpu;
 #endif
 
+	print_init(FALSE);
+
 #ifdef LIB_EFI_SERVICES
 	if (!init_efi_services(xd->system_table_base)) {
 		print_panic("%s: Failed init efi services\n", __func__);
-		return;
+		return -1;
 	}
 #endif
 
-	print_init(FALSE);
-
 	if (xd->top_of_mem == 0)
-		return;
+		return -1;
 
 	if (xd->tsc_per_ms == 0)
 		xd->tsc_per_ms = determine_nominal_tsc_freq()/1000ULL;
@@ -122,7 +122,7 @@ void stage1_main(evmm_desc_t *xd)
 	tsc_per_ms = xd->tsc_per_ms;
 	if (tsc_per_ms == 0) {
 		print_panic("%s: Invalid TSC frequency!\n", __func__);
-		return;
+		return -1;
 	}
 
 #ifdef CPU_NUM
@@ -138,10 +138,15 @@ void stage1_main(evmm_desc_t *xd)
 #endif
 #endif
 
+#ifdef MODULE_TEMPLATE_TEE
+	if (xd->x64_cr3 == 0)
+		xd->x64_cr3 = asm_get_cr3();
+#endif
+
 	/* Load evmm image */
 	if (!relocate_elf_image(&(xd->evmm_file), (uint64_t *)&vmm_main)) {
 		print_panic("relocate evmm file fail\n");
-		return;
+		return -1;
 	}
 	evmm_desc = xd;
 
@@ -155,14 +160,14 @@ void stage1_main(evmm_desc_t *xd)
 	num_of_cpu = (uint32_t)efi_launch_aps((uint64_t)ap_continue);
 	if ((num_of_cpu == 0) || (num_of_cpu > MAX_CPU_NUM)) {
 		print_panic("%s: (EFI)Failed to launch all APs\n", __func__);
-		return;
+		return -1;
 	}
 	xd->num_of_cpu = num_of_cpu;
 #else
 	num_of_cpu = launch_aps(xd->sipi_ap_wkup_addr, xd->num_of_cpu, (uint64_t)ap_continue);
 	if (num_of_cpu > MAX_CPU_NUM) {
 		print_panic("%s: (Legacy)Failed to launch all APs\n", __func__);
-		return;
+		return -1;
 	}
 	if (xd->num_of_cpu == 0)
 		xd->num_of_cpu = num_of_cpu;
@@ -171,9 +176,12 @@ void stage1_main(evmm_desc_t *xd)
 
 	print_info("Loader: Launch VMM\n");
 
+	/* disable interrupts before jump to vmm */
+	asm volatile("cli;");
+
 	/* launch vmm on BSP */
 	vmm_main(0, evmm_desc);
 	/*should never return here!*/
-	return;
+	return -1;
 }
 /* End of file */

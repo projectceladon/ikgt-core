@@ -6,8 +6,13 @@
 #
 ################################################
 
+ifneq (, $(CLANG_BINDIR))
+#using local clang for evmmpacker
+export CC = clang
+else
 #using local gcc for evmmpacker
 export CC = gcc
+endif
 
 OUTDIR = $(BUILD_DIR)packer/
 $(shell mkdir -p $(OUTDIR))
@@ -35,6 +40,9 @@ CFLAGS = $(EVMM_CMPL_FLAGS) -s -static -Werror
 endif
 
 CFLAGS += $(INCLUDES)
+ifeq ($(CC), clang)
+CFLAGS += -Qunused-arguments
+endif
 
 COBJS = $(addprefix $(OUTDIR), $(notdir $(patsubst %.c, %.o, $(CSOURCES))))
 
@@ -47,17 +55,17 @@ all: $(COBJS) $(TARGET)
 # 2. pack stage0.bin, stage1.bin, evmm.bin into evmm_pkg.bin
 #
 $(COBJS): $(CSOURCES)
-	$(CC) -c $(CFLAGS) -o $@ $(filter $(*F).c, $(CSOURCES))
+	$(CC) -c $(CFLAGS) -o $@ $(notdir $(patsubst %.o, %.c, $@))
 
 $(TARGET): $(COBJS)
 	$(CC) $(CFLAGS) -o $(BUILD_DIR)$@ $(wildcard $(OUTDIR)*.o)
 
 pack:$(TARGET)
 ifneq (, $(findstring -DPACK_LK, $(EVMM_CMPL_FLAGS)))
-	if [ $(LKBIN_DIR) ]; then cp $(LKBIN_DIR)lk.elf $(BUILD_DIR); fi
+	if [ $(LKBIN_DIR) ]; then cp $(LKBIN_DIR)lk.bin $(BUILD_DIR); fi
 else
 ifneq (, $(findstring -DPACK_OPTEE, $(EVMM_CMPL_FLAGS)))
-	if [ $(OPTEEBIN_DIR) ]; then cp $(OPTEEBIN_DIR)tee-pager.bin $(BUILD_DIR); fi
+	if [ $(OPTEEBIN_DIR) ]; then cp $(OPTEEBIN_DIR)tee-pager_v2.bin $(BUILD_DIR); fi
 endif
 endif
 	chmod +x $(BUILD_DIR)$(TARGET) && \

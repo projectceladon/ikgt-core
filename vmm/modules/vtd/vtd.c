@@ -20,6 +20,7 @@
 
 #include "lib/util.h"
 #include "modules/vtd.h"
+#include "modules/vmcall.h"
 
 #define VTD_REG_CAP     0x0008
 #define VTD_REG_ECAP    0x0010
@@ -30,9 +31,11 @@
 #define VTD_REG_IVA(IRO)   ((IRO) << 4)             // IVA_REG = VTD_REG_BASE + 16*(ECAP.IRO)
 #define VTD_REG_IOTLB(IRO) (VTD_REG_IVA(IRO) + 0x8) // IOTLB_REG = IVA_REG + 0x8
 
-/* GCMD_REG Bits */
-#define VTD_GCMD_TE   (1ULL << 31)
-#define VTD_GCMD_SRTP (1ULL << 30)
+/* GCMD_REG Bits offset */
+typedef enum {
+	VTD_GCMD_SRTP = 30,
+	VTD_GCMD_TE   = 31
+} VTD_GCMD_BIT;
 
 typedef enum {
 	IOTLB_IIRG_RESERVED = 0,
@@ -68,6 +71,7 @@ typedef struct {
 
 vtd_engine_t engine_list[DMAR_MAX_ENGINE];
 dma_remapping_t g_remapping;
+static volatile int vtd_activated = FALSE;
 
 static inline
 uint64_t vtd_read_reg64(uint64_t base_hva, uint64_t reg)
@@ -107,7 +111,7 @@ static void vtd_get_cap(void)
 	}
 }
 
-static void vtd_calculate_trans_cap(uint8_t *max_leaf, uint8_t *tm, uint8_t *snoop)
+static void vtd_calculate_trans_cap(uint8_t *max_leaf, uint8_t *tm, uint8_t *snoop, uint8_t *sagaw)
 {
 	uint32_t i;
 	uint32_t idx = 0;
@@ -117,6 +121,7 @@ static void vtd_calculate_trans_cap(uint8_t *max_leaf, uint8_t *tm, uint8_t *sno
 	*max_leaf = MAM_LEVEL_PML4;
 	*tm = 1;
 	*snoop = 1;
+	*sagaw = SAGAW_SUPPORT_3_LVL_PT | SAGAW_SUPPORT_4_LVL_PT;
 
 	for (i=0; i<DMAR_MAX_ENGINE; i++) {
 		if (!engine_list[i].reg_base_hva)
@@ -129,9 +134,7 @@ static void vtd_calculate_trans_cap(uint8_t *max_leaf, uint8_t *tm, uint8_t *sno
 		/* Get maxium leaf level, MAM starts from 4KB, VT-D starts from 2MB */
 		*max_leaf = MIN(*max_leaf, idx);
 
-		/* Need 4-level page-table support */
-		VMM_ASSERT_EX(engine_list[i].cap.bits.sagaw & (1ull << 2),
-				"4-level page-table isn't supported by vtd\n");
+		*sagaw &= engine_list[i].cap.bits.sagaw;
 
 		/*
 		 * Check TM/SNOOP support in external capablity register,
@@ -142,20 +145,29 @@ static void vtd_calculate_trans_cap(uint8_t *max_leaf, uint8_t *tm, uint8_t *sno
 		*tm = *tm & engine_list[i].ecap.bits.dt;
 		*snoop = *snoop & engine_list[i].ecap.bits.sc;
 	}
+
+	/* Need 3/4-level page-table support */
+	VMM_ASSERT_EX(*sagaw & (SAGAW_SUPPORT_3_LVL_PT | SAGAW_SUPPORT_4_LVL_PT),
+		"VT-d: 3/4-level page-table is NOT supported!\n");
 }
 
-static void vtd_send_global_cmd(vtd_engine_t *engine, uint32_t cmd)
+static void vtd_send_global_cmd(vtd_engine_t *engine, VTD_GCMD_BIT bit, uint32_t v)
 {
 	volatile uint32_t value;
 	value = vtd_read_reg32(engine->reg_base_hva, VTD_REG_GSTS);
+	value &= 0x96FFFFFFU; //Reset the one-shot bits
 
-	value |= cmd;
+	if (v) {
+		value |= (1U << bit);
+	} else {
+		value &= (~(1U << bit));
+	}
 
 	vtd_write_reg32(engine->reg_base_hva, VTD_REG_GCMD, value);
 
 	while (1) {
 		value = vtd_read_reg32(engine->reg_base_hva, VTD_REG_GSTS);
-		if (value & cmd)
+		if (!!(value & ( 1U << bit)) == v)
 			break;
 		else
 			asm_pause();
@@ -206,12 +218,12 @@ void vtd_update_domain_mapping(UNUSED guest_cpu_handle_t gcpu, void *pv)
 			attr.uint32);
 }
 
-#define set_ctx_entry(ctx_entry, did, slptptr_hpa) \
+#define set_ctx_entry(ctx_entry, did, slptptr_hpa, agaw) \
 { \
 	/* Present(1) = 1 */ \
 	(ctx_entry)->low = (slptptr_hpa) | 0x1; \
-	/* AW(66:64) = 2; DID(87:72) = did */ \
-	(ctx_entry)->high = (((uint64_t)(did)) << 8) | 2; \
+	/* AW(66:64) = agaw; DID(87:72) = did */ \
+	(ctx_entry)->high = (((uint64_t)(did)) << 8) | agaw; \
 }
 
 static void vtd_init_dev_mapping(void)
@@ -219,16 +231,16 @@ static void vtd_init_dev_mapping(void)
 	dma_root_entry_t *root_entry;
 	dma_context_entry_t *ctx_entry;
 	dma_context_entry_t *ctx_table;
+	vtd_trans_table_t trans_table;
 	uint32_t i;
-	uint64_t slptptr_hpa;
 	uint64_t ctx_table_hpa;
 
-	slptptr_hpa = mam_get_table_hpa(vtd_get_mam_handle(gid2did(0)));
+	vtd_get_trans_table(gid2did(0), &trans_table);
 
 	ctx_table = (dma_context_entry_t *)page_alloc(1);
 	for (i=0; i<256; i++) {
 		ctx_entry = &ctx_table[i];
-		set_ctx_entry(ctx_entry, gid2did(0), slptptr_hpa);
+		set_ctx_entry(ctx_entry, gid2did(0), trans_table.hpa, trans_table.agaw);
 	}
 
 	VMM_ASSERT_EX(hmm_hva_to_hpa((uint64_t)ctx_table, &ctx_table_hpa, NULL),
@@ -252,12 +264,10 @@ void vtd_assign_dev(uint16_t domain_id, uint16_t dev_id)
 	dma_root_entry_t *root_entry = NULL;
 	dma_context_entry_t *ctx_table = NULL;
 	dma_context_entry_t *ctx_entry = NULL;
+	vtd_trans_table_t trans_table;
 	uint64_t ctx_table_hpa;
 	uint64_t ctx_table_hva;
 	uint64_t hpa;
-	mam_handle_t mam_handle;
-
-	mam_handle = vtd_get_mam_handle(domain_id);
 
 	/* Locate Context-table from Root-table according to device_id(Bus) */
 	root_entry = &g_remapping.root_table[dev_id>>8];
@@ -282,9 +292,11 @@ void vtd_assign_dev(uint16_t domain_id, uint16_t dev_id)
 		ctx_table = (dma_context_entry_t *)ctx_table_hva;
 	}
 
+	vtd_get_trans_table(domain_id, &trans_table);
+
 	/* Locate Context-entry from Context-table according to device_id(Dev:Func) */
 	ctx_entry = &ctx_table[dev_id & 0xFF];
-	set_ctx_entry(ctx_entry, domain_id, mam_get_table_hpa(mam_handle));
+	set_ctx_entry(ctx_entry, domain_id, trans_table.hpa, trans_table.agaw);
 }
 #endif
 
@@ -346,23 +358,55 @@ static void vtd_invalidate_cache(UNUSED guest_cpu_handle_t gcpu, void *pv)
 	}
 }
 
+static void vmcall_activate_vtd(guest_cpu_handle_t gcpu UNUSED)
+{
+	uint32_t i;
+	guest_handle_t guest;
+
+	if (vtd_activated)
+		return;
+
+	/* Remove DMAR engine from Guest mapping */
+	for (i = 0; i < DMAR_MAX_ENGINE; i++) {
+		if (engine_list[i].reg_base_hpa) {
+			for (guest = get_guests_list(); guest != NULL; guest = guest->next_guest)
+				gpm_remove_mapping(guest, engine_list[i].reg_base_hpa, PAGE_4K_SIZE);
+		}
+	}
+
+	event_register(EVENT_GUEST_MODULE_INIT, vtd_guest_setup);
+
+	vtd_activate();
+}
+
 void vtd_init(void)
 {
-	uint8_t max_leaf, tm, snoop;
+	uint8_t max_leaf, tm, snoop, sagaw;
 
 	vtd_dmar_parse(engine_list);
 
 	vtd_get_cap();
 
-	vtd_calculate_trans_cap(&max_leaf, &tm, &snoop);
-	set_translation_cap(max_leaf, tm, snoop);
+	vtd_calculate_trans_cap(&max_leaf, &tm, &snoop, &sagaw);
+	set_translation_cap(max_leaf, tm, snoop, sagaw);
 
 	vtd_init_dev_mapping();
 
 	event_register(EVENT_GPM_SET, vtd_update_domain_mapping);
-	event_register(EVENT_GUEST_MODULE_INIT, vtd_guest_setup);
 	event_register(EVENT_RESUME_FROM_S3, vtd_reactivate_from_s3);
 	event_register(EVENT_GPM_INVALIDATE, vtd_invalidate_cache);
+#ifndef ACTIVATE_VTD_BY_VMCALL
+	event_register(EVENT_GUEST_MODULE_INIT, vtd_guest_setup);
+#endif
+
+	/*
+	 * Always register this VMCALL when VT-d is enabled in regardless of
+	 * definition of ACTIVATE_VTD_BY_VMCALL. This is to make bootloader
+	 * unified/simpler to just blindly call this vmcall to activate VT-d
+	 * in eVMM. eVMM will check VT-d state and do the corresponding action.
+	 */
+#define VMCALL_ACTIVATE_VTD 0x56544400ULL        // "VTD"
+	vmcall_register(0, VMCALL_ACTIVATE_VTD, vmcall_activate_vtd);
 }
 
 static uint64_t get_root_table_hpa(void)
@@ -380,10 +424,16 @@ static void vtd_enable_dmar(vtd_engine_t *engine, uint64_t rt_hpa)
 	vtd_write_reg64(engine->reg_base_hva, VTD_REG_RTADDR, (uint64_t)rt_hpa);
 
 	/* Set Root Table Pointer*/
-	vtd_send_global_cmd(engine, VTD_GCMD_SRTP);
+	vtd_send_global_cmd(engine, VTD_GCMD_SRTP, 1U);
 
 	/* Translation Enable */
-	vtd_send_global_cmd(engine, VTD_GCMD_TE);
+	vtd_send_global_cmd(engine, VTD_GCMD_TE, 1U);
+}
+
+static void vtd_disable_dmar(vtd_engine_t *engine)
+{
+	/* Translation Disable */
+	vtd_send_global_cmd(engine, VTD_GCMD_TE, 0U);
 }
 
 void vtd_activate(void)
@@ -395,9 +445,14 @@ void vtd_activate(void)
 
 	rt_hpa = get_root_table_hpa();
 
-	for (i=0; i<DMAR_MAX_ENGINE; i++) {
+	for (i = 0; i < DMAR_MAX_ENGINE; i++) {
 		if (engine_list[i].reg_base_hva) {
+			/* Disable VT-d first in case of any in-flight DMA request */
+			vtd_disable_dmar(&engine_list[i]);
+
 			vtd_enable_dmar(&engine_list[i], rt_hpa);
 		}
 	}
+
+	vtd_activated = TRUE;
 }

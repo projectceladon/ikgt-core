@@ -474,6 +474,7 @@ typedef uint8_t cache_type_t;
 #define MSR_APIC_BASE              (0x01B)
 #define MSR_FEATURE_CONTROL        ((uint32_t)0x03A)
 #define MSR_TSC_ADJUST             ((uint32_t)0x03B)
+#define MSR_BIOS_UPDT_TRIG         ((uint32_t)0x079)
 #define MSR_TSC_DEADLINE           ((uint32_t)0x6E0)
 #define MSR_SYSENTER_CS            ((uint32_t)0x174)
 #define MSR_SYSENTER_ESP           ((uint32_t)0x175)
@@ -483,6 +484,31 @@ typedef uint8_t cache_type_t;
 #define MSR_PAT                    ((uint32_t)0x277)
 #define MSR_PERF_GLOBAL_CTRL       ((uint32_t)0x38F)
 #define MSR_EFER                   ((uint32_t)0xC0000080)
+
+/*
+ * VMX MSR Indexes
+ */
+#define MSR_VMX_BASIC                  0x480
+#define MSR_VMX_PINBASED_CTRLS         0x481
+#define MSR_VMX_PROCBASED_CTRLS        0x482
+#define MSR_VMX_PROCBASED_CTRLS2       0x48B
+#define MSR_VMX_EXIT_CTRLS             0x483
+#define MSR_VMX_ENTRY_CTRLS            0x484
+#define MSR_VMX_MISC                   0x485
+#define MSR_VMX_CR0_FIXED0             0x486
+#define MSR_VMX_CR0_FIXED1             0x487
+#define MSR_VMX_CR4_FIXED0             0x488
+#define MSR_VMX_CR4_FIXED1             0x489
+#define MSR_VMX_VMCS_ENUM              0x48A
+#define MSR_VMX_EPT_VPID_CAP           0x48C
+#define MSR_VMX_TRUE_PINBASED_CTRLS    0x48D
+#define MSR_VMX_TRUE_PROCBASED_CTRLS   0x48E
+#define MSR_VMX_TRUE_EXIT_CTRLS        0x48F
+#define MSR_VMX_TRUE_ENTRY_CTRLS       0x490
+#define MSR_VMX_VMFUNC                 0x491
+
+#define MSR_VMX_FIRST                  MSR_VMX_BASIC
+#define MSR_VMX_LAST                   MSR_VMX_VMFUNC
 
 /*
  * MSRs for Side Channal Attack Dectection and Mitigation
@@ -514,6 +540,20 @@ typedef uint8_t cache_type_t;
 #define EFER_LMA        (1ull << 10)
 #define EFER_NXE        (1ull << 11)
 
+typedef union msr_efer {
+	struct {
+		uint64_t sce:1;
+		uint64_t rsvd0:7;
+		uint64_t lme:1;
+		uint64_t rsvd1:1;
+		uint64_t lma:1;
+		uint64_t nxe:1;
+		uint64_t rsvd:52;
+	} bits;
+	uint64_t uint64;
+} msr_efer_t;
+
+
 #define MSR_STAR                   ((uint32_t)0xc0000081)	/* System Call Target Address */
 #define MSR_LSTAR                  ((uint32_t)0xc0000082)	/* IA-32e Mode System Call Target Address */
 #define MSR_FMASK                  ((uint32_t)0xc0000084)	/* System Call Flag Mask */
@@ -535,7 +575,7 @@ typedef union {
 	struct {
 		uint32_t type:4;                 /* bits 3:0   */
 		uint32_t s_bit:1;                /* bit  4     */
-		uint32_t dpl:2;                  /* bit2 6:5   */
+		uint32_t dpl:2;                  /* bits 6:5   */
 		uint32_t p_bit:1;                /* bit  7     */
 		uint32_t reserved_11_8:4;        /* bits 11:8  */
 		uint32_t avl_bit:1;              /* bit  12    */

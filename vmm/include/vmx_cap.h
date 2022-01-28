@@ -62,7 +62,7 @@ uint32_t get_proctl1_cap(uint32_t* p_may0);
  *
  *------------------------------------------------------------------------- */
 #define PROC2_VAPIC_ACCESSES      (1u << 0)
-#define PRO2C_ENABLE_EPT          (1u << 1)
+#define PROC2_ENABLE_EPT          (1u << 1)
 #define PROC2_DESCRIPTOR_EXIT     (1u << 2)
 #define PROC2_ENABLE_RDTSCP       (1u << 3)
 #define PROC2_VX2APIC_MODE        (1u << 4)
@@ -216,9 +216,6 @@ typedef union {
 }  basic_info_t;
 
 uint64_t get_basic_cap();
-
-#define MSR_VMX_FIRST               0x480
-#define MSR_VMX_LAST                0x491
 
 /*-------------------------------------------------------------------------
  *

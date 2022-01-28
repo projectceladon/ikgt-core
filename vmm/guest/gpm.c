@@ -170,11 +170,12 @@ void gpm_set_mapping(IN guest_handle_t guest,
 	VMM_ASSERT_EX((gpa & 0xFFFULL) == 0, "gpm mapping gpa 0x%llX isn't 4K page aligned\n", gpa);
 	VMM_ASSERT_EX((hpa & 0xFFFULL) == 0, "gpm mapping hpa 0x%llX isn't 4K page aligned\n", hpa);
 	VMM_ASSERT_EX((size & 0xFFFULL) == 0, "gpm mapping size 0x%llX isn't 4K page aligned\n", size);
-	VMM_ASSERT_EX(((hpa < (hpa + size)) && ((hpa + size) <= top_of_memory)),
+	VMM_ASSERT_EX(((hpa < (hpa + size)) && ((hpa + size) <= MAX_PHYS_ADDR)),
 					"gpm mapiing hpa 0x%llX and size 0x%llX is invalid\n", hpa, size);
 
 	ept_attr.uint32 = attr;
 
+	/* For mapping in [0, top_of_memory), set cache type with MTRR */
 	for (; mtrr_ptr; mtrr_ptr = mtrr_ptr->next) {
 		if ((hpa_tmp >= mtrr_ptr->base) && (hpa_tmp < (mtrr_ptr->base + mtrr_ptr->size))) {
 			ept_attr.bits.emt = mtrr_ptr->type;
@@ -184,6 +185,7 @@ void gpm_set_mapping(IN guest_handle_t guest,
 							hpa_tmp,
 							size_tmp,
 							ept_attr.uint32);
+				size_tmp = 0;
 				break;
 			} else {
 				cnt = mtrr_ptr->size - (hpa_tmp - mtrr_ptr->base);
@@ -200,6 +202,12 @@ void gpm_set_mapping(IN guest_handle_t guest,
 		} else {
 			D(VMM_ASSERT(hpa_tmp > mtrr_ptr->base));
 		}
+	}
+
+	/* For [top_of_memory, MAX_PHYS_ADDR), set cache type to Uncached. */
+	if (size_tmp > 0) {
+		ept_attr.bits.emt = CACHE_TYPE_UC;
+		mam_insert_range(guest->gpa_to_hpa, gpa_tmp, hpa_tmp, size_tmp, ept_attr.uint32);
 	}
 
 	event_gpm_set.guest = guest;

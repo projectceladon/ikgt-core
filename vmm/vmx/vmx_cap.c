@@ -12,6 +12,7 @@
 #include "host_cpu.h"
 #include "dbg.h"
 #include "vmm_arch.h"
+#include "kvm_workaround.h"
 
 #include "lib/util.h"
 
@@ -32,28 +33,6 @@ typedef struct  {
 } vmx_cap_t;
 
 static vmx_cap_t g_vmx_cap;
-
-/*------------------------------ macros            ------------------------ */
-/*
- * VMX MSR Indexes
- */
-#define MSR_VMX_BASIC                  0x480
-#define MSR_VMX_PINBASED_CTRLS         0x481
-#define MSR_VMX_PROCBASED_CTRLS        0x482
-#define MSR_VMX_PROCBASED_CTRLS2       0x48B
-#define MSR_VMX_EXIT_CTRLS             0x483
-#define MSR_VMX_ENTRY_CTRLS            0x484
-#define MSR_VMX_MISC                   0x485
-#define MSR_VMX_CR0_FIXED0             0x486
-#define MSR_VMX_CR0_FIXED1             0x487
-#define MSR_VMX_CR4_FIXED0             0x488
-#define MSR_VMX_CR4_FIXED1             0x489
-#define MSR_VMX_VMCS_ENUM              0x48A
-#define MSR_VMX_EPT_VPID_CAP           0x48C
-#define MSR_VMX_TRUE_PINBASED_CTRLS    0x48D
-#define MSR_VMX_TRUE_PROCBASED_CTRLS   0x48E
-#define MSR_VMX_TRUE_EXIT_CTRLS        0x48F
-#define MSR_VMX_TRUE_ENTRY_CTRLS       0x490
 
 /*------------------------------ interface functions----------------------- */
 uint64_t get_basic_cap()
@@ -211,7 +190,7 @@ void vmx_cap_init()
 		| PROC_SECONDARY_CTRL;
 
 	ctrl_may1 = get_proctl2_cap(&ctrl_may0);
-	must_have = PRO2C_ENABLE_EPT;
+	must_have = PROC2_ENABLE_EPT;
 	VMM_ASSERT_EX((must_have & ctrl_may1) == must_have,
 		"proc2: may1 = %x, must_have = %x\n", ctrl_may1, must_have);
 	nice_have = PROC2_ENABLE_RDTSCP
@@ -262,10 +241,11 @@ void vmx_cap_init()
 	g_vmx_cap.init_cr4 |= nice_have & cr_may1;
 
 	misc_data.uint64 = get_misc_data_cap();
-#if (MAX_CPU_NUM > 1)
-	VMM_ASSERT_EX(misc_data.bits.sipi,
-		"wait-for-SIPI is not supported\n");
-#endif
+	if ((host_cpu_num > 1) && !running_on_kvm()) {
+		VMM_ASSERT_EX(misc_data.bits.sipi,
+			"wait-for-SIPI is not supported\n");
+	}
+
 	VMM_ASSERT_EX(misc_data.bits.save_guest_mode,
 		"auto-save of IA-32e mode guest in vmentry control is not supported.\n");
 }

@@ -24,6 +24,11 @@ static struct guest_descriptor_t *guests;
 static uint64_t g_evmm_rt_base;
 static uint64_t g_evmm_rt_size;
 
+guest_handle_t get_guests_list(void)
+{
+	return guests;
+}
+
 guest_handle_t guest_handle(uint16_t guest_id)
 {
 	struct guest_descriptor_t *guest;
@@ -82,6 +87,7 @@ void guest_save_evmm_range(uint64_t evmm_rt_base, uint64_t evmm_rt_size)
 	g_evmm_rt_size = evmm_rt_size;
 }
 
+#define MAX_GUEST_PHY_ADDR (1ULL << 48ULL)
 /* there're many settings for a guest, such as number of gcpu, which gcpu register to which host cpu, ept policy, guest physical mapping.
 ** for this create_guest(), only number of gcpu is specified, other settings are:
 ** 1. gcpu register to the host cpu with same cpu id
@@ -101,7 +107,7 @@ guest_handle_t create_guest(uint32_t gcpu_count, uint32_t attr)
 	guest = guest_register();
 
 	if (attr) {
-		gpm_set_mapping(guest, 0, 0, top_of_memory, attr);
+		gpm_set_mapping(guest, 0, 0, MAX_PHYS_ADDR, attr);
 
 		/* remove eVMM area from guest */
 		gpm_remove_mapping(guest, g_evmm_rt_base, g_evmm_rt_size);

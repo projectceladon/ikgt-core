@@ -11,7 +11,6 @@
 #include "vmm_arch.h"
 #include "evmm_desc.h"
 #include "ldr_dbg.h"
-#include "device_sec_info.h"
 #include "stage0_lib.h"
 #include "lib/util.h"
 
@@ -51,18 +50,6 @@ void setup_32bit_env(gcpu_state_t *gcpu_state)
 	fill_segment(&gcpu_state->segment[SEG_LDTR], 0, 0, 0x10000, 0);
 
 	gcpu_state->cr0 = CR0_ET|CR0_PE;
-}
-
-void make_dummy_trusty_info(void *info)
-{
-	device_sec_info_v0_t *device_sec_info = (device_sec_info_v0_t *)info;
-
-	memset(device_sec_info, 0, sizeof(device_sec_info_v0_t));
-
-	device_sec_info->size_of_this_struct = sizeof(device_sec_info_v0_t);
-	device_sec_info->version = 0;
-	device_sec_info->platform = 0;
-	device_sec_info->num_seeds = 1;
 }
 
 static uint32_t get_file_size(file_offset_header_t *file_hdr, uint32_t file_index)
@@ -237,32 +224,6 @@ uint64_t get_top_of_memory(multiboot_info_t *mbi)
 			offs, mmap->addr, mmap->len, mmap->type, mmap->size);
 		if (tom < (mmap->addr + mmap->len))
 			tom = mmap->addr + mmap->len;
-	}
-	print_trace("top of memory = %llx\n", tom);
-
-	return tom;
-}
-
-/* Get top of memory from efi memory map description */
-uint64_t get_efi_tom(uint64_t mmap_addr, uint32_t mmap_size)
-{
-	uint64_t tom = 0;
-	efi_mem_desc_t *mmap = NULL;
-	uint32_t i;
-	uint32_t nr_entry;
-
-	if (mmap_addr == 0) {
-		print_panic("mmap_addr is NULL\n");
-		return 0;
-	}
-
-	mmap = (efi_mem_desc_t *)mmap_addr;
-	nr_entry = mmap_size/sizeof(efi_mem_desc_t);
-
-	for (i = 0; i < nr_entry; i++) {
-		if (tom < (mmap->PhysicalStart + mmap->NumberOfPages * PAGE_4K_SIZE))
-			tom = mmap->PhysicalStart + mmap->NumberOfPages * PAGE_4K_SIZE;
-		mmap ++;
 	}
 	print_trace("top of memory = %llx\n", tom);
 

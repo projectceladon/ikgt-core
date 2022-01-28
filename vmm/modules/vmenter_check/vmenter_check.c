@@ -74,7 +74,6 @@
 #define PAE_PDPTE_PRESENT            (1ull << 0)
 #define PAE_PDPTE_RESV_21_85_BITS    0x1E6      // bits 2:1 and bits 8:5 are reserved
 
-#define MSR_BIOS_UPDT_IRIG           0X79
 #define MSR_SIGN_BBL_CR_D3           0X8B
 #define MSR_SMM_MONITOR_CTL          0x9B
 
@@ -397,7 +396,6 @@ static void check_segment_selector(vmcs_obj_t vmcs)
 	seg_ar_t ldtr_ar;
 	boolean_t  is_ug;
 	boolean_t  is_vr8086;
-	uint32_t   proc_ctrl2;
 	uint16_t  cs_sel, ss_sel, tr_sel, ldtr_sel;
 
 	cs_sel   = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_CS_SEL);
@@ -463,7 +461,6 @@ static void check_segment_base_address(vmcs_obj_t vmcs)
 	seg_ar_t ldtr_ar;
 	boolean_t  is_64bit;
 	boolean_t  is_vr8086;
-	uint32_t   proc_ctrl2;
 	segment_t  cs;
 	segment_t  ss;
 	segment_t  ds;
@@ -479,6 +476,7 @@ static void check_segment_base_address(vmcs_obj_t vmcs)
 	es.base = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_ES_BASE);
 	fs.base = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_FS_BASE);
 	gs.base = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_GS_BASE);
+	tr.base = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_TR_BASE);
 	cs.selector = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_CS_SEL);
 	ss.selector = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_SS_SEL);
 	ds.selector = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_DS_SEL);
@@ -1373,7 +1371,7 @@ static void check_guest_rflags(vmcs_obj_t vmcs)
 	is_64bit = ((vmentry_control & ENTRY_GUEST_IA32E_MODE) != 0);
 	rflags = vmcs_read(vmcs, VMCS_GUEST_RFLAGS);
 	cr0 = vmcs_read(vmcs, VMCS_GUEST_CR0);
-	if ((rflags & 0xFFFFFFFFFFC0802A) != 2)
+	if ((rflags & 0xFFFFFFFFFFC0802AULL) != 2)
 	{
 		print_info("Guest RFLAGS.reserved bits are invalid\n");
 	}
@@ -1439,13 +1437,13 @@ static void check_guest_activity_state(vmcs_obj_t vmcs)
 	 **  The activity-state field must not indicate the wait-for-SIPI state if the "entry
 	 **  to SMM" VM-entry control is 1.
 	 */
-	activity_state_t               activity;
+	uint32_t                       activity;
 	uint32_t                       interruptibility;
 	vmx_exit_idt_info_t            vmenter_intr_info;
 	uint32_t                       vmentry_control;
 	seg_ar_t                       ss_ar;
 
-	activity = (activity_state_t) vmcs_read(vmcs, VMCS_GUEST_ACTIVITY_STATE);
+	activity = (uint32_t) vmcs_read(vmcs, VMCS_GUEST_ACTIVITY_STATE);
 	interruptibility = (uint32_t) vmcs_read(vmcs, VMCS_GUEST_INTERRUPTIBILITY);
 	ss_ar.u32 = (uint32_t) vmcs_read(vmcs, VMCS_GUEST_SS_AR);
 	vmenter_intr_info.uint32 = (uint32_t) vmcs_read(vmcs, VMCS_ENTRY_INTR_INFO);
@@ -1566,7 +1564,7 @@ static void check_guest_interruptibility_state(vmcs_obj_t vmcs)
 	uint64_t                        guest_rflags;
 	uint32_t                        pin_control;
 	uint32_t                        vmentry_control;
-	cpuid_params_t                 cpuid_params;
+	cpuid_params_t                 cpuid_params = {0, 0, 0, 0};
 
 	interruptibility = (uint32_t) vmcs_read(vmcs, VMCS_GUEST_INTERRUPTIBILITY);
 	vmenter_intr_info.uint32 = (uint32_t) vmcs_read(vmcs, VMCS_ENTRY_INTR_INFO);
@@ -1574,7 +1572,7 @@ static void check_guest_interruptibility_state(vmcs_obj_t vmcs)
 	pin_control     = (uint32_t) vmcs_read(vmcs, VMCS_PIN_CTRL);
 	guest_rflags = vmcs_read(vmcs, VMCS_GUEST_RFLAGS);
 
-	if (0 != interruptibility & INTR_RESERVED)
+	if (0 != (interruptibility & INTR_RESERVED))
 	{
 		print_info("Interruptibility-state reserved bits (bits 31:4) must be 0\n");
 	}
@@ -1689,19 +1687,19 @@ static void check_guest_pending_debug_exception(vmcs_obj_t vmcs)
 	 **    (bit 1 in that field must be 0).
 	 */
 	uint64_t                       pending_debg;
-	activity_state_t               activity;
+	uint32_t                       activity;
 	uint32_t                       interruptibility;
 	uint64_t                       ctrl_debg;
 	uint64_t                       guest_rflags;
-	cpuid_params_t                 cpuid_params;
+	cpuid_params_t                 cpuid_params = {0, 0, 0, 0};
 
-	activity = (activity_state_t) vmcs_read(vmcs, VMCS_GUEST_ACTIVITY_STATE);
+	activity = (uint32_t) vmcs_read(vmcs, VMCS_GUEST_ACTIVITY_STATE);
 	interruptibility = (uint32_t) vmcs_read(vmcs, VMCS_GUEST_INTERRUPTIBILITY);
 	guest_rflags = vmcs_read(vmcs, VMCS_GUEST_RFLAGS);
 	pending_debg = vmcs_read(vmcs, VMCS_GUEST_PEND_DBG_EXCEPTION);
 	ctrl_debg = vmcs_read(vmcs, VMCS_GUEST_DBGCTL);
 
-	if ((pending_debg & 0xFFFFFFFFFFFEAFF0) != 0)
+	if ((pending_debg & 0xFFFFFFFFFFFEAFF0ULL) != 0)
 	{
 		print_info("Guest Pending deug exception reserved bits are invalid\n");
 	}
@@ -1724,7 +1722,7 @@ static void check_guest_pending_debug_exception(vmcs_obj_t vmcs)
 
 	if (pending_debg & NRS_PENDING_DEBG_RTM_BIT)
 	{
-		if ((pending_debg & 0xFFFFFFFFFFFEFFFF) != 0x1000)
+		if ((pending_debg & 0xFFFFFFFFFFFEFFFFULL) != 0x1000)
 		{
 			print_info("Guest Pending deug exception Bits 11:0, bits 15:13, and\n");
 			print_info("bits 63:17 must be 0; bit 12 must be 1.\n");
@@ -1755,7 +1753,7 @@ static void check_guest_vmcs_link_pointer(vmcs_obj_t vmcs)
 	uint64_t  link_ptr;
 
 	link_ptr = vmcs_read(vmcs, VMCS_LINK_PTR);
-	if (link_ptr != (uint64_t)-1)
+	if (link_ptr != 0xFFFFFFFFFFFFFFFFULL)
 	{
 		print_info("VMCS link pointer must be 0xFFFFFFFFFFFFFFFF\n");
 	}
@@ -1817,7 +1815,7 @@ static void check_guest_pdpte(vmcs_obj_t vmcs)
 
 	if ((cr0 & CR0_PG) && (cr4 & CR4_PAE) && (is_64bit == 0))
 	{
-		if (proc_ctrl2 & PRO2C_ENABLE_EPT)
+		if (proc_ctrl2 & PROC2_ENABLE_EPT)
 		{
 			for (idx = VMCS_GUEST_PDPTR0; idx <= VMCS_GUEST_PDPTR3; idx++)
 			{
@@ -2082,10 +2080,8 @@ static void check_vmx_apic_access(vmcs_obj_t vmcs)
 	 **  The address should not set any bits beyond the processor's
 	 **  physical-address width.
 	 */
-	uint32_t proc_ctrl;
 	uint32_t proc_ctrl2;
 
-	proc_ctrl = (uint32_t)vmcs_read(vmcs, VMCS_PROC_CTRL1);
 	proc_ctrl2 = (uint32_t)vmcs_read(vmcs, VMCS_PROC_CTRL2);
 
 	if (proc_ctrl2 & PROC2_VAPIC_ACCESSES)
@@ -2232,7 +2228,7 @@ static void check_vmx_enable_ept(vmcs_obj_t vmcs)
 	eptp.uint64 = vmcs_read(vmcs, VMCS_EPTP_ADDRESS);
 	ept_vpid_cap.uint64 = get_ept_vpid_cap();
 	proc_ctrl2 = (uint32_t)vmcs_read(vmcs, VMCS_PROC_CTRL2);
-	if (proc_ctrl2 & PRO2C_ENABLE_EPT)
+	if (proc_ctrl2 & PROC2_ENABLE_EPT)
 	{
 		if (eptp.bits.emt == CACHE_TYPE_WB)
 		{
@@ -2284,7 +2280,7 @@ static void check_vmx_enable_pml(vmcs_obj_t vmcs)
 	uint32_t proc_ctrl2;
 
 	proc_ctrl2 = (uint32_t)vmcs_read(vmcs, VMCS_PROC_CTRL2);
-	if ((proc_ctrl2 & (PROC2_ENABLE_PML | PRO2C_ENABLE_EPT)) == (PROC2_ENABLE_PML | PRO2C_ENABLE_EPT))
+	if ((proc_ctrl2 & (PROC2_ENABLE_PML | PROC2_ENABLE_EPT)) == (PROC2_ENABLE_PML | PROC2_ENABLE_EPT))
 	{
 		// TODO: The PML address  will not be used, so we do not check it here.
 	}
@@ -2302,7 +2298,7 @@ static void check_vmx_ug(vmcs_obj_t vmcs)
 	proc_ctrl2 = (uint32_t)vmcs_read(vmcs, VMCS_PROC_CTRL2);
 	if (proc_ctrl2 & PROC2_UNRESTRICTED_GUEST)
 	{
-		if ((proc_ctrl2 & PRO2C_ENABLE_EPT) == 0)
+		if ((proc_ctrl2 & PROC2_ENABLE_EPT) == 0)
 		{
 			print_info("If ug is 1, the enable EPT must also be 1.\n");
 		}
@@ -2437,17 +2433,17 @@ static void check_vm_active_preemption_timer(vmcs_obj_t vmcs)
 	}
 }
 
-static void check_vm_msr_addr(uint64_t addr, uint32_t count, char* name)
+static void check_vm_msr_addr(uint64_t addr, uint32_t count, const char* name)
 {
 	/*
 	 ** According to IA32 Manual: Volume 3, Chapter 26.2.1.2:
 	 **  The following checks are performed for the MSR store/load address
 	 **  if the MSR store/load count field is non-zero:
 	 **   The lower 4 bits of the MSR-store/load address must be 0.
-	 **   The address should not set any bits beyond the processor¡¯s physical-address width.
+	 **   The address should not set any bits beyond the processors physical-address width.
 	 **   The address of the last byte in the  MSR-store/load area should not set any bits
 	 **   beyond the processor's physical-address width. The address of this last byte
-	 **   is MSR-store/load address + (MSR count * 16) ¨C1.
+	 **   is MSR-store/load address + (MSR count * 16) - 1.
 	 **   If IA32_VMX_BASIC[48] is read as 1, neither address should set any bits in the range 63:32.
 	 */
 	uint64_t last_byte_addr;
@@ -2469,7 +2465,7 @@ static void check_vm_msr_addr(uint64_t addr, uint32_t count, char* name)
 		last_byte_addr = addr + (count*16) - 1;
 		if(last_byte_addr >> get_max_phy_addr())
 		{
-			print_info("The %s last byte addr should not set any bits beyond the processor¡¯s physical-address width..\n",
+			print_info("The %s last byte addr should not set any bits beyond the processors physical-address width..\n",
 				name);
 		}
 
@@ -2543,11 +2539,11 @@ static void check_vm_entry_intr_type(vmcs_obj_t vmcs)
 {
 	/*
 	 ** According to IA32 Manual: Volume 3, Chapter 26.2.1.3:
-	 **  The field¡¯s interruption type (bits 10:8) is not set to a reserved value.
+	 **  The fields interruption type (bits 10:8) is not set to a reserved value.
 	 **  Value 1 is reserved on all logical processors; value 7 (other event)
 	 **  is reserved on logical processors that do not support the 1-setting of
 	 **  the "monitor trap flag" VM-execution control.
-	 **  The field¡¯s vector (bits 7:0) is consistent with the interruption type:
+	 **  The fields vector (bits 7:0) is consistent with the interruption type:
 	 **  If the interruption type is non-maskable interrupt (NMI), the vector is 2.
 	 **  If the interruption type is hardware exception, the vector is at most 31.
 	 **  If the interruption type is other event, the vector is 0 (pending MTF VM exit).
@@ -2559,7 +2555,7 @@ static void check_vm_entry_intr_type(vmcs_obj_t vmcs)
 	{
 		if ((entry_info.bits.interrupt_type == VECTOR_TYPE_OTHER_EVE) || (entry_info.bits.interrupt_type == VECTOR_TYPE_RES))
 		{
-			print_info("The field¡¯s interruption type (bits 10:8) is not set to a reserved value.\n");
+			print_info("The fields interruption type (bits 10:8) is not set to a reserved value.\n");
 		}
 
 		if (entry_info.bits.interrupt_type == VECTOR_TYPE_NMI)
@@ -2815,7 +2811,7 @@ static void check_host_64bits_settings(vmcs_obj_t vmcs)
 	 ** According to IA32 Manual: Volume 3, Chapter 26.2.2:
 	 **  On processors that support Intel 64 architecture,
 	 **  the CR3 field must be such that bits 63:52 and bits
-	 **  in the range 51:32 beyond the processor¡¯s
+	 **  in the range 51:32 beyond the processors
 	 **  physical-address width must be 0.
 	 **  On processors that support Intel 64 architecture,
 	 **  the IA32_SYSENTER_ESP field and the IA32_SYSENTER_EIP
@@ -2833,7 +2829,7 @@ static void check_host_64bits_settings(vmcs_obj_t vmcs)
 
 	if(cr3 >> get_max_phy_addr())
 	{
-		print_info("Host CR3 beyond the processor¡¯s physical-address width must be 0\n");
+		print_info("Host CR3 beyond the processors physical-address width must be 0\n");
 	}
 
 	if(addr_is_canonical(is_64bit, sysenter_esp) == FALSE)
@@ -3104,7 +3100,7 @@ static void check_host_segment(vmcs_obj_t vmcs)
 	is_64bit = ((vmcs_read(vmcs, VMCS_EXIT_CTRL) & EXIT_HOST_ADDR_SPACE) != 0);
 	/*check host segment selector and base*/
 	check_host_segment_sel_base(SEG_CS, cs_sel, 0, is_64bit);
-	check_host_segment_sel_base(SEG_DS, ss_sel, 0, is_64bit);
+	check_host_segment_sel_base(SEG_DS, ds_sel, 0, is_64bit);
 	check_host_segment_sel_base(SEG_SS, ss_sel, 0, is_64bit);
 	check_host_segment_sel_base(SEG_ES, es_sel, 0, is_64bit);
 	check_host_segment_sel_base(SEG_FS, fs_sel, fs_base, is_64bit);
@@ -3207,17 +3203,13 @@ static void check_loading_msr(vmcs_obj_t vmcs)
 	 */
 	uint32_t load_count;
 	uint64_t load_addr;
-	uint64_t proc2_ctrl;
 	uint64_t entry_ctrl;
-	uint64_t cr0;
 	msr_list_t * msr_list;
 	uint32_t list_idx;
 
 	load_addr = vmcs_read(vmcs, VMCS_ENTRY_MSR_LOAD_ADDR);
 	load_count = (uint32_t)vmcs_read(vmcs, VMCS_ENTRY_MSR_LOAD_COUNT);
-	proc2_ctrl = vmcs_read(vmcs, VMCS_PROC_CTRL2);
 	entry_ctrl = vmcs_read(vmcs, VMCS_ENTRY_CTRL);
-	cr0 = vmcs_read(vmcs, VMCS_HOST_CR0);
 
 	if (load_count == 0)
 	{
@@ -3259,10 +3251,10 @@ static void check_loading_msr(vmcs_obj_t vmcs)
 			}
 		}
 
-		if ((msr_list[list_idx].msr_index == MSR_BIOS_UPDT_IRIG)
+		if ((msr_list[list_idx].msr_index == MSR_BIOS_UPDT_TRIG)
 			|| (msr_list[list_idx].msr_index == MSR_SIGN_BBL_CR_D3))
 		{
-			print_info("The msr index(0x%x) in entry load msr list[id=%u] can not be MSR_BIOS_UPDT_IRIG or MSR_SIGN_BBL_CR_D3.\n",
+			print_info("The msr index(0x%x) in entry load msr list[id=%u] can not be MSR_BIOS_UPDT_TRIG or MSR_SIGN_BBL_CR_D3.\n",
 				msr_list[list_idx].msr_index, list_idx);
 		}
 
@@ -3309,8 +3301,7 @@ static void vmenter_failure_check(guest_cpu_handle_t gcpu)
 	/* According to IA32 Manual: Volume 3, Chapter 26.3.1.*/
 	VMM_ASSERT_EX(gcpu, "gcpu is NULL in vmenter failure check\n");
 
-	vmcs_obj_t vmcs = gcpu->vmcs;
-	vmcs_check(vmcs);
+	vmcs_check(gcpu->vmcs);
 
 	VMM_DEADLOOP();
 }

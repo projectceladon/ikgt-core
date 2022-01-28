@@ -277,8 +277,6 @@ void gcpu_set_reset_state(guest_cpu_handle_t gcpu)
 	vmcs_write(vmcs, VMCS_GUEST_SYSENTER_EIP, 0);
 	vmcs_write(vmcs, VMCS_GUEST_PAT, asm_rdmsr(MSR_PAT));
 
-	/* Put guest CPU into the WAIT-FOR-SIPI state */
-	/*  wait-for-SIPI support is checked in vmx_cap_init() */
 	vmcs_write(vmcs, VMCS_GUEST_ACTIVITY_STATE,
 			ACTIVITY_STATE_WAIT_FOR_SIPI);
 
@@ -399,7 +397,7 @@ void gcpu_set_64bit_state(guest_cpu_handle_t gcpu, uint64_t x86_cr3)
 
 	vmcs_write(vmcs, VMCS_GUEST_CR0, CR0_PE|CR0_ET|CR0_NE|CR0_PG);
 	vmcs_write(vmcs, VMCS_GUEST_CR3, x86_cr3);
-	vmcs_write(vmcs, VMCS_GUEST_CR4, CR4_PAE|CR4_VMXE);
+	vmcs_write(vmcs, VMCS_GUEST_CR4, CR4_PAE);
 
 	vmcs_write(vmcs, VMCS_GUEST_GDTR_BASE, 0);
 	vmcs_write(vmcs, VMCS_GUEST_GDTR_LIMIT, 0x17);
@@ -420,6 +418,6 @@ void gcpu_set_64bit_state(guest_cpu_handle_t gcpu, uint64_t x86_cr3)
 
 	/* set state in vmenter control fields */
 	cr0_guest_write(gcpu, CR0_PE|CR0_ET|CR0_NE|CR0_PG);
-	cr4_guest_write(gcpu, CR4_PAE|CR4_VMXE);
+	cr4_guest_write(gcpu, CR4_PAE);
 	gcpu_update_guest_mode(gcpu);
 }
