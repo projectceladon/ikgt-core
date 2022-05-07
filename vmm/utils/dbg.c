@@ -27,6 +27,9 @@ vmm_lock_t vmm_print_lock;
 #ifndef DEBUG
 static void reset_platform(void)
 {
+	while (1) {
+		__asm__ __volatile__ ("pause");
+	}
 
 	/* see io-controller-hub-10-family-datasheet
 	 * chapter 13 LPC Interface Bridge Registers
