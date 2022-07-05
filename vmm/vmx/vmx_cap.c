@@ -313,7 +313,7 @@ uint64_t vmcs_alloc()
 	return hpa;
 }
 
-#if DEBUG
+//#if DEBUG
 #define CAP_IDX_START   MSR_VMX_BASIC
 #define CAP_IDX_END     MSR_VMX_TRUE_ENTRY_CTRLS
 #define SAVE_COUNT      (CAP_IDX_END - CAP_IDX_START + 1)
@@ -327,6 +327,7 @@ static void vmx_bsp_save()
 	for(msr_id = CAP_IDX_START; msr_id <= CAP_IDX_END; msr_id ++)
 	{
 		bsp_vmx_cap [msr_id-CAP_IDX_START] = asm_rdmsr(msr_id);
+		print_info("cpu(%d): MSR(0x%x)=0x%llx\n", host_cpu_id(), msr_id, asm_rdmsr(msr_id));
 	}
 }
 
@@ -336,8 +337,12 @@ static void vmx_ap_check()
 
 	for(msr_id = CAP_IDX_START; msr_id <= CAP_IDX_END; msr_id ++)
 	{
-		VMM_ASSERT_EX((bsp_vmx_cap [msr_id-CAP_IDX_START] == asm_rdmsr(msr_id)),
-			"cpu(%d) cap(0x%x) copmared failed with cpu0 in %s\n", host_cpu_id(), msr_id, __FUNCTION__);
+		print_info("cpu(%d): MSR(msr_id)=0x%llx\n", host_cpu_id(), msr_id, asm_rdmsr(msr_id));
+		//VMM_ASSERT_EX((bsp_vmx_cap [msr_id-CAP_IDX_START] == asm_rdmsr(msr_id)),
+		//	"cpu(%d) cap(0x%x) copmared failed with cpu0 in %s\n", host_cpu_id(), msr_id, __FUNCTION__);
+		if (bsp_vmx_cap[msr_id-CAP_IDX_START] != asm_rdmsr(msr_id)) {
+			print_warn("cpu(%d): MSR(0x%x) diff with cpu0\n", host_cpu_id(), msr_id);
+		}
 	}
 }
 
@@ -352,4 +357,4 @@ void vmx_cap_check()
 		vmx_ap_check();
 	}
 }
-#endif
+//#endif

@@ -306,9 +306,9 @@ void vmm_main_continue(vmm_input_params_t *vmm_input_params)
 	if (cpuid == 0) {
 		vmx_cap_init();
 	}
-#ifdef DEBUG
+//#ifdef DEBUG
 	vmx_cap_check();
-#endif
+//#endif
 	/* init CR0/CR4 to the VMX compatible values */
 	asm_set_cr0(get_init_cr0());
 	asm_set_cr4(get_init_cr4());
