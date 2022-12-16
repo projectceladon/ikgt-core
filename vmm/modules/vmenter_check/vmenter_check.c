@@ -477,6 +477,7 @@ static void check_segment_base_address(vmcs_obj_t vmcs)
 	fs.base = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_FS_BASE);
 	gs.base = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_GS_BASE);
 	tr.base = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_TR_BASE);
+	ldtr.base = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_LDTR_BASE);
 	cs.selector = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_CS_SEL);
 	ss.selector = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_SS_SEL);
 	ds.selector = (uint16_t) vmcs_read(vmcs, VMCS_GUEST_DS_SEL);
@@ -3155,7 +3156,7 @@ static void check_related_host_addr_space_size(vmcs_obj_t vmcs)
 	rip = vmcs_read(vmcs, VMCS_HOST_RIP);
 	cr4 = vmcs_read(vmcs, VMCS_HOST_CR4);
 	/*This evmm always runs in 64 bit mode (IA-32e mode).*/
-	if ((exit_ctrl & EXIT_HOST_ADDR_SPACE) == 1)
+	if (exit_ctrl & EXIT_HOST_ADDR_SPACE)
 	{
 		if ((cr4 & CR4_PAE) == 0)
 		{
