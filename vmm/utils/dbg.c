@@ -18,6 +18,8 @@
 #include "lock.h"
 #include "event.h"
 
+#include "modules/ipc.h"
+
 #ifdef LIB_PRINT
 vmm_lock_t vmm_print_lock;
 #endif
@@ -25,8 +27,25 @@ vmm_lock_t vmm_print_lock;
 #define RESET_IO_PORT         0xCF9
 
 #ifndef DEBUG
+void prepare_reset_percpu(guest_cpu_handle_t gcpu_unused UNUSED, void *unused UNUSED)
+{
+    guest_cpu_handle_t gcpu = get_current_gcpu();
+	guest_cpu_handle_t gcpu_next = gcpu;
+
+	do {
+		vmcs_clr_ptr(gcpu_next->vmcs);
+
+		gcpu_next = gcpu_next->next_same_host_cpu;
+	} while (gcpu_next != gcpu);
+
+	vmx_off();
+}
+
 static void reset_platform(void)
 {
+	/* kvm expects vmxoff prior to vcpu reset */
+	ipc_exec_on_all_other_cpus(prepare_reset_percpu, NULL);
+	prepare_reset_percpu(NULL, NULL);
 
 	/* see io-controller-hub-10-family-datasheet
 	 * chapter 13 LPC Interface Bridge Registers
@@ -137,6 +156,7 @@ final:
 #ifndef DEBUG
 	reset_platform();
 #endif
+	printf("BUG: reset_platform not working\n");
 	__STOP_HERE__;
 	//printf("BUG: should never see this log after deadloop\n");
 }
